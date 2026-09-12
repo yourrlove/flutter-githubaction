@@ -49,14 +49,7 @@ jobs:
       - name: 📥 Get dependencies
         run: flutter pub get
 
-      - name: 🔑 Authenticate to Google Play
-        id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
-          token_format: access_token
-
-      - name: 🔢 Compute next version code from Play
+      - name: 🔢 Compute version
         id: version
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -64,31 +57,13 @@ jobs:
           else
             NAME="$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' pubspec.yaml | head -n1)"
           fi
-
-          PKG="com.lua.tech.fluttergithubaction"
-          TOKEN="${{ steps.auth.outputs.access_token }}"
-          API="https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PKG"
-
-          EDIT_ID=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$API/edits" | jq -r '.id')
-          if [ -z "$EDIT_ID" ] || [ "$EDIT_ID" = "null" ]; then
-            echo "::error::Could not create a Play edit. Check the service account has access to $PKG."
-            exit 1
-          fi
-
-          BUNDLES_MAX=$(curl -sf -H "Authorization: Bearer $TOKEN" "$API/edits/$EDIT_ID/bundles" | jq '[.bundles[]?.versionCode] | max // 0')
-          TRACKS_MAX=$(curl -sf -H "Authorization: Bearer $TOKEN" "$API/edits/$EDIT_ID/tracks"  | jq '[.tracks[]?.releases[]?.versionCodes[]?] | max // 0')
-
-          curl -sf -X DELETE -H "Authorization: Bearer $TOKEN" "$API/edits/$EDIT_ID" > /dev/null || true
-
-          BUNDLES_MAX=${BUNDLES_MAX:-0}
-          TRACKS_MAX=${TRACKS_MAX:-0}
-          MAX=$BUNDLES_MAX
-          if [ "$TRACKS_MAX" -gt "$MAX" ]; then MAX=$TRACKS_MAX; fi
-          CODE=$(( MAX + 1 ))
-
+          MAJOR=$(echo "$NAME" | cut -d. -f1 | tr -cd '0-9'); MAJOR=${MAJOR:-0}
+          MINOR=$(echo "$NAME" | cut -d. -f2 | tr -cd '0-9'); MINOR=${MINOR:-0}
+          PATCH=$(echo "$NAME" | cut -d. -f3 | tr -cd '0-9'); PATCH=${PATCH:-0}
+          CODE=$(( MAJOR * 1000000 + MINOR * 1000 + PATCH ))
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
-          echo "Publishing versionName=$NAME versionCode=$CODE (Play max was $MAX)"
+          echo "Publishing versionName=$NAME versionCode=$CODE"
 
       - name: 🔐 Decode Keystore
         env:
