@@ -47,3 +47,6 @@ app.*.map.json
 # Secure signing files
 *.jks
 keystore.txt
+
+# fastlane generated artifacts
+**/fastlane/report.xml
