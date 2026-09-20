@@ -1,0 +1,145 @@
+name: 🛰️ Distribute to App Distribution Portal
+
+# Manually publish an arm64-v8a release APK to the self-hosted App Distribution
+# Portal (see the portal's docs/ci.md and docs/public-access.md).
+#
+# Required repository configuration:
+#   Secrets:  ADP_API_URL  e.g. https://portal.example.com/api/v1
+#             ADP_TOKEN    project-scoped API token with the builds:write scope
+#   Variable: ADP_PROJECT  project slug (e.g. flutter-githubaction)
+# Reuses the existing KEYSTORE_* secrets so the APK is signed with the upload key.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Release channel to publish to'
+        required: true
+        default: 'staging'
+        type: choice
+        options: [dev, staging, production]
+      version:
+        description: 'Version (optional; a leading "v" is ignored). Defaults to pubspec version.'
+        required: false
+        type: string
+      build_number:
+        description: 'Build number (optional; defaults to <run>.<attempt>)'
+        required: false
+        type: string
+      changelog:
+        description: 'Release notes (optional)'
+        required: false
+        type: string
+      notify:
+        description: 'Email testers subscribed to the channel'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distribute-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  distribute:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📂 Checkout code
+        uses: actions/checkout@v7
+
+      - name: ☕️ Setup Java (Temurin 17)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: 🦋 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 📥 Get dependencies
+        run: flutter pub get
+
+      - name: 🔐 Decode Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
+          else
+            echo "::error::KEYSTORE_BASE64 secret is required for a signed release build."
+            exit 1
+          fi
+
+      - name: 🏗️ Build arm64-v8a APK
+        env:
+          KEYSTORE_PATH: "upload-keystore.jks"
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: 🔢 Compute metadata
+        id: meta
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_BUILD_NUMBER: ${{ github.event.inputs.build_number }}
+          INPUT_CHANGELOG: ${{ github.event.inputs.changelog }}
+          INPUT_CHANNEL: ${{ github.event.inputs.channel }}
+        run: |
+          VERSION="${INPUT_VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' pubspec.yaml | head -n1)"
+          fi
+          BUILD_NUMBER="$INPUT_BUILD_NUMBER"
+          if [ -z "$BUILD_NUMBER" ]; then
+            BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          CHANGELOG="$INPUT_CHANGELOG"
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Automated build from ${GITHUB_SHA}"
+          fi
+          {
+            echo "version=$VERSION"
+            echo "build_number=$BUILD_NUMBER"
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing version=$VERSION build=$BUILD_NUMBER channel=$INPUT_CHANNEL"
+
+      - name: ✅ Check portal configuration
+        env:
+          ADP_API_URL: ${{ secrets.ADP_API_URL }}
+          ADP_TOKEN: ${{ secrets.ADP_TOKEN }}
+          ADP_PROJECT: ${{ vars.ADP_PROJECT }}
+        run: |
+          if [ -z "$ADP_PROJECT" ]; then
+            echo "::error::Repository variable ADP_PROJECT is not set."
+            exit 1
+          fi
+          if [ -z "$ADP_API_URL" ] || [ -z "$ADP_TOKEN" ]; then
+            echo "::error::Secrets ADP_API_URL and ADP_TOKEN must be set."
+            exit 1
+          fi
+
+      - name: 🛰️ Publish to App Distribution Portal
+        env:
+          ADP_API_URL: ${{ secrets.ADP_API_URL }}
+          ADP_TOKEN: ${{ secrets.ADP_TOKEN }}
+          ADP_PROJECT: ${{ vars.ADP_PROJECT }}
+          ADP_FILE: build/app/outputs/flutter-apk/app-release.apk
+          ADP_VERSION: ${{ steps.meta.outputs.version }}
+          ADP_BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+          ADP_CHANNEL: ${{ github.event.inputs.channel }}
+          ADP_CHANGELOG: ${{ steps.meta.outputs.changelog }}
+          ADP_PUBLISH: 'true'
+          ADP_NOTIFY: ${{ github.event.inputs.notify }}
+        run: bash scripts/adp-upload.sh

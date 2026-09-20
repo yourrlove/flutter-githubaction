@@ -57,7 +57,10 @@ jobs:
           else
             NAME="$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' pubspec.yaml | head -n1)"
           fi
-          CODE="${{ github.run_number }}"
+          MAJOR=$(echo "$NAME" | cut -d. -f1 | tr -cd '0-9'); MAJOR=${MAJOR:-0}
+          MINOR=$(echo "$NAME" | cut -d. -f2 | tr -cd '0-9'); MINOR=${MINOR:-0}
+          PATCH=$(echo "$NAME" | cut -d. -f3 | tr -cd '0-9'); PATCH=${PATCH:-0}
+          CODE=$(( MAJOR * 1000000 + MINOR * 1000 + PATCH ))
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "Publishing versionName=$NAME versionCode=$CODE"
@@ -87,5 +90,5 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.lua.tech.fluttergithubaction
           releaseFiles: build/app/outputs/bundle/release/app-release.aab
-          track: ${{ github.event.inputs.track || 'internal' }}
+          tracks: ${{ github.event.inputs.track || 'internal' }}
           status: ${{ github.event.inputs.status || 'draft' }}
